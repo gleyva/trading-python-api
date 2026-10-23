@@ -13,7 +13,9 @@ app = FastAPI(
     version="2.0.0"
 )
 
-BINANCE_URL = "https://api.binance.com/api/v3/klines"
+
+    # BINANCE_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_URL = "https://data-api.binance.vision/api/v3/klines"
 
 INTERVALOS = {
     "1m", "3m", "5m", "15m", "30m",
