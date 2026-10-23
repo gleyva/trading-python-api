@@ -1,141 +1,343 @@
-"""API para indicadores de velas Binance. Ejecución: uvicorn main:app --reload."""
-import requests
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
+
 import pandas as pd
 import pandas_ta_classic as ta
+import requests
+import re
 
-from datetime import datetime, timezone
-from typing import Any
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+app = FastAPI(
+    title="Trading Indicators API",
+    description="Indicadores técnicos sobre velas Binance",
+    version="2.0.0"
+)
 
+BINANCE_URL = "https://api.binance.com/api/v3/klines"
 
-app = FastAPI(title='Indicadores BTC Binance', version='1.0.0', description='Calcula EMA20, EMA50, RSI14 y MACD(12,26,9) y retorna las últimas diez velas.')
+INTERVALOS = {
+    "1m", "3m", "5m", "15m", "30m",
+    "1h", "2h", "4h", "6h",
+    "8h", "12h", "1d", "3d",
+    "1w", "1M"
+}
 
-class DatosRequest(BaseModel):
-    candles: list[Any] = Field(..., description='Velas Binance como arreglos o diccionarios con claves 0..11')
-    symbol: str = 'BTCUSDT'
-    interval: str = '5m'
-    only_closed: bool = True
-
-
-def ema_series(values: list[float], period: int) -> list[float | None]:
-    result: list[float | None] = [None] * len(values)
-    if len(values) < period:
-        return result
-    current = sum(values[:period]) / period
-    result[period - 1] = current
-    alpha = 2 / (period + 1)
-    for i in range(period, len(values)):
-        current = (values[i] - current) * alpha + current
-        result[i] = current
-    return result
-
-
-def rsi_series(values: list[float], period: int = 14) -> list[float | None]:
-    result: list[float | None] = [None] * len(values)
-    if len(values) <= period:
-        return result
-    diffs = [values[i] - values[i - 1] for i in range(1, len(values))]
-    gain = sum(max(x, 0) for x in diffs[:period]) / period
-    loss = sum(max(-x, 0) for x in diffs[:period]) / period
-    def convert(g: float, l: float) -> float:
-        if l == 0:
-            return 100.0 if g > 0 else 50.0
-        return 100 - 100 / (1 + g / l)
-    result[period] = convert(gain, loss)
-    for i in range(period + 1, len(values)):
-        change = diffs[i - 1]
-        gain = (gain * (period - 1) + max(change, 0)) / period
-        loss = (loss * (period - 1) + max(-change, 0)) / period
-        result[i] = convert(gain, loss)
-    return result
+COLUMNAS = [
+    "open_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "close_time",
+    "quote_volume",
+    "trades",
+    "taker_buy_base",
+    "taker_buy_quote",
+    "ignore"
+]
 
 
-def macd_series(values: list[float]):
-    fast = ema_series(values, 12)
-    slow = ema_series(values, 26)
-    line: list[float | None] = [None] * len(values)
-    for i in range(len(values)):
-        if fast[i] is not None and slow[i] is not None:
-            line[i] = fast[i] - slow[i]
-    valid = [(i, x) for i, x in enumerate(line) if x is not None]
-    signal: list[float | None] = [None] * len(values)
-    if len(valid) >= 9:
-        alpha = 2 / 10
-        s = sum(x for _, x in valid[:9]) / 9
-        signal[valid[8][0]] = s
-        for idx, x in valid[9:]:
-            s = (x - s) * alpha + s
-            signal[idx] = s
-    hist = [None if a is None or b is None else a - b for a, b in zip(line, signal)]
-    return line, signal, hist
-
-
-def read_candle(record: Any) -> dict:
-    if isinstance(record, dict):
-        if 'json' in record and isinstance(record['json'], (list, dict)):
-            record = record['json']
-        if isinstance(record, dict):
-            if 'data' in record and isinstance(record['data'], list):
-                record = record['data']
-            elif '0' in record or 0 in record:
-                record = [record.get(str(i), record.get(i)) for i in range(12)]
-            elif 'open_time' in record:
-                try:
-                    return {'open_time': int(record['open_time']), 'close_time': int(record['close_time']), 'open': float(record['open']), 'high': float(record['high']), 'low': float(record['low']), 'close': float(record['close']), 'volume': float(record['volume'])}
-                except (KeyError, TypeError, ValueError) as ex:
-                    raise ValueError(f'Campos OHLCV incorrectos: {ex}') from ex
-    if not isinstance(record, (list, tuple)) or len(record) < 7:
-        raise ValueError('Cada vela debe ser un arreglo kline de al menos 7 posiciones o un objeto equivalente')
-    try:
-        return {'open_time': int(record[0]), 'open': float(record[1]), 'high': float(record[2]), 'low': float(record[3]), 'close': float(record[4]), 'volume': float(record[5]), 'close_time': int(record[6])}
-    except (TypeError, ValueError) as ex:
-        raise ValueError(f'Valores de vela inválidos: {ex}') from ex
-
-
-@app.get('/health')
+@app.get("/health")
 def health():
-    return {'status': 'ok'}
+    return {
+        "status": "ok",
+        "version": "2.0.0"
+    }
 
 
-@app.post('/datos')
-def datos(request: DatosRequest):
+@app.get("/indicadores")
+def indicadores(
+    symbol: str = Query(
+        "BTCUSDT",
+        min_length=3,
+        max_length=20
+    ),
+    timeframe: str = Query("5m"),
+    periodos: int = Query(
+        100,
+        gt=50,
+        le=800
+    )
+):
+
+    # =====================================
+    # 1. VALIDAR PARÁMETROS
+    # =====================================
+
+    symbol = symbol.upper().strip()
+
+    if not re.fullmatch(r"[A-Z0-9]{3,20}", symbol):
+        raise HTTPException(
+            status_code=400,
+            detail="Símbolo inválido"
+        )
+
+    if timeframe not in INTERVALOS:
+        raise HTTPException(
+            status_code=400,
+            detail="Timeframe no soportado por Binance"
+        )
+
+    # Historial adicional para inicializar
+    # los indicadores EMA, RSI, MACD y ADX.
+    warmup = 200
+    limit = periodos + warmup
+
+    # =====================================
+    # 2. CONSULTAR BINANCE
+    # =====================================
+
     try:
-        candles = [read_candle(c) for c in request.candles]
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        if request.only_closed:
-            candles = [c for c in candles if c['close_time'] < now_ms]
-        candles.sort(key=lambda c: c['open_time'])
-        # Exigir velas distintas: duplicados distorsionan indicadores.
-        times = [c['open_time'] for c in candles]
-        if len(times) != len(set(times)):
-            raise ValueError('Hay velas duplicadas por open_time')
-        if any(c['high'] < max(c['open'], c['close'], c['low']) or c['low'] > min(c['open'], c['close'], c['high']) or c['volume'] < 0 for c in candles):
-            raise ValueError('Datos OHLCV inconsistentes')
-        if len(candles) < 50:
-            raise ValueError('Se requieren al menos 50 velas cerradas para calcular indicadores estables')
-        prices = [c['close'] for c in candles]
-        e20 = ema_series(prices, 20)
-        e50 = ema_series(prices, 50)
-        r14 = rsi_series(prices, 14)
-        macd, signal, hist = macd_series(prices)
-        def rounded(v, decimals=8):
-            return None if v is None else round(v, decimals)
-        output = []
-        for i in range(max(0, len(candles) - 10), len(candles)):
-            c = candles[i]
-            output.append({
-                'open_time': c['open_time'],
-                'close_time': c['close_time'],
-                'fecha_cierre_utc': datetime.fromtimestamp(c['close_time'] / 1000, timezone.utc).isoformat(),
-                'close': c['close'],
-                'ema20': rounded(e20[i]),
-                'ema50': rounded(e50[i]),
-                'rsi14': rounded(r14[i], 3),
-                'macd': rounded(macd[i]),
-                'macd_signal': rounded(signal[i]),
-                'macd_histogram': rounded(hist[i]),
-            })
-        return {'symbol': request.symbol, 'interval': request.interval, 'velas_procesadas': len(candles), 'registros': output}
-    except (ValueError, OverflowError) as ex:
-        raise HTTPException(status_code=422, detail=str(ex)) from ex
+        response = requests.get(
+            BINANCE_URL,
+            params={
+                "symbol": symbol,
+                "interval": timeframe,
+                "limit": limit
+            },
+            timeout=20
+        )
+
+        response.raise_for_status()
+        velas = response.json()
+
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error consultando Binance: {exc}"
+        )
+
+    if not isinstance(velas, list) or not velas:
+        raise HTTPException(
+            status_code=502,
+            detail="Respuesta de Binance inválida"
+        )
+
+    # =====================================
+    # 3. CONSTRUIR DATAFRAME
+    # =====================================
+
+    # Eliminar elementos sin 12 posiciones
+    velas = [
+        v for v in velas
+        if isinstance(v, list) and len(v) >= 12
+    ]
+
+    if not velas:
+        raise HTTPException(
+            status_code=422,
+            detail="Binance no devolvió velas válidas"
+        )
+
+    df = pd.DataFrame(
+        [v[:12] for v in velas],
+        columns=COLUMNAS
+    )
+
+    # Convertir campos numéricos
+    numeric_cols = [
+        "open_time",
+        "close_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume"
+    ]
+
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
+        )
+
+    # =====================================
+    # 4. DEPURACIÓN DE DATOS
+    # =====================================
+
+    original_count = len(df)
+
+    # Eliminar valores nulos o no numéricos
+    df = df.dropna(subset=numeric_cols).copy()
+
+    # Orden cronológico
+    df = df.sort_values("open_time")
+
+    # Cada vela es única por su apertura
+    df = df.drop_duplicates(
+        subset=["open_time"],
+        keep="last"
+    )
+
+    # Solo velas cerradas
+    now_ms = pd.Timestamp.now(tz="UTC").value // 10**6
+
+    df = df[
+        (df["close_time"] < now_ms) &
+        (df["close_time"] > df["open_time"])
+    ].copy()
+
+    # Validar coherencia de OHLCV
+    valid = (
+        (df["open"] > 0) &
+        (df["high"] > 0) &
+        (df["low"] > 0) &
+        (df["close"] > 0) &
+        (df["volume"] >= 0) &
+
+        (df["high"] >= df["low"]) &
+        (df["high"] >= df["open"]) &
+        (df["high"] >= df["close"]) &
+
+        (df["low"] <= df["open"]) &
+        (df["low"] <= df["close"])
+    )
+
+    df = df[valid].copy()
+
+    df = df.reset_index(drop=True)
+
+    removed_count = original_count - len(df)
+
+    if len(df) < 51:
+        raise HTTPException(
+            status_code=422,
+            detail="Se requieren más de 50 velas válidas"
+        )
+
+    if len(df) < periodos:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Solo hay {len(df)} velas válidas; "
+                f"se solicitaron {periodos}"
+            )
+        )
+
+    # =====================================
+    # 5. CALCULAR INDICADORES TÉCNICOS
+    # =====================================
+
+    # EMA
+    df["ema20"] = ta.ema(
+        df["close"],
+        length=20
+    )
+
+    df["ema50"] = ta.ema(
+        df["close"],
+        length=50
+    )
+
+    # RSI
+    df["rsi14"] = ta.rsi(
+        df["close"],
+        length=14
+    )
+
+    # MACD (12,26,9)
+    macd = ta.macd(
+        df["close"],
+        fast=12,
+        slow=26,
+        signal=9
+    )
+
+    df["macd"] = macd["MACD_12_26_9"]
+    df["macd_signal"] = macd["MACDs_12_26_9"]
+    df["macd_histogram"] = macd["MACDh_12_26_9"]
+
+    # ADX14 y DI
+    adx = ta.adx(
+        high=df["high"],
+        low=df["low"],
+        close=df["close"],
+        length=14
+    )
+
+    df["adx14"] = adx["ADX_14"]
+
+    # =====================================
+    # 6. FORMATEAR FECHAS
+    # =====================================
+
+    df["open_datetime"] = pd.to_datetime(
+        df["open_time"],
+        unit="ms",
+        utc=True
+    )
+
+    df["close_datetime"] = pd.to_datetime(
+        df["close_time"],
+        unit="ms",
+        utc=True
+    )
+
+    # =====================================
+    # 7. SELECCIONAR ÚLTIMAS N VELAS
+    # =====================================
+
+    result = df.tail(periodos).copy()
+
+    registros = []
+
+    for _, row in result.iterrows():
+
+        def numero(value, decimals=8):
+            if pd.isna(value):
+                return None
+            return round(float(value), decimals)
+
+        registros.append({
+            "open_date": row["open_datetime"].strftime(
+                "%Y-%m-%d"
+            ),
+            "open_time": row["open_datetime"].strftime(
+                "%H:%M:%S"
+            ),
+            "close_date": row["close_datetime"].strftime(
+                "%Y-%m-%d"
+            ),
+            "close_time": row["close_datetime"].strftime(
+                "%H:%M:%S"
+            ),
+            "open_timestamp": int(row["open_time"]),
+            "close_timestamp": int(row["close_time"]),
+
+            "open": numero(row["open"]),
+            "high": numero(row["high"]),
+            "low": numero(row["low"]),
+            "close": numero(row["close"]),
+            "volume": numero(row["volume"]),
+
+            "ema20": numero(row["ema20"]),
+            "ema50": numero(row["ema50"]),
+            "rsi14": numero(row["rsi14"], 4),
+
+            "macd": numero(row["macd"]),
+            "macd_signal": numero(row["macd_signal"]),
+            "macd_histogram": numero(
+                row["macd_histogram"]
+            ),
+
+            "adx14": numero(row["adx14"], 4)
+        })
+
+    # =====================================
+    # 8. RESPUESTA API
+    # =====================================
+
+    return JSONResponse(
+        content={
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "periodos": periodos,
+            "timezone": "UTC",
+            "velas_recibidas": original_count,
+            "velas_validas": len(df),
+            "velas_eliminadas": removed_count,
+            "total_registros": len(registros),
+            "registros": registros
+        }
+    )
