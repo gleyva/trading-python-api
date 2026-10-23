@@ -1,11 +1,13 @@
 """API para indicadores de velas Binance. Ejecución: uvicorn main:app --reload."""
+import requests
+import pandas as pd
+import pandas_ta_classic as ta
+
 from datetime import datetime, timezone
 from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-import requests
-import pandas as pd
-import pandas_ta_classic as ta
+
 
 app = FastAPI(title='Indicadores BTC Binance', version='1.0.0', description='Calcula EMA20, EMA50, RSI14 y MACD(12,26,9) y retorna las últimas diez velas.')
 
