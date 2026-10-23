@@ -34,3 +34,6 @@ def analyze(data: Indicadores):
         "signal": signal,
         "price": data.price
     }
+@app.get("/hellow")
+def health():
+    return {"status": "Hellow word"}
