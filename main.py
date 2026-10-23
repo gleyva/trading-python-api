@@ -1,3 +1,35 @@
+"""API para indicadores de velas Binance. Ejecución: uvicorn main:app --reload."""
+from datetime import datetime, timezone
+from typing import Any
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+app = FastAPI(title='Indicadores BTC Binance', version='1.0.0', description='Calcula EMA20, EMA50, RSI14 y MACD(12,26,9) y retorna las últimas diez velas.')
+
+class DatosRequest(BaseModel):
+    candles: list[Any] = Field(..., description='Velas Binance como arreglos o diccionarios con claves 0..11')
+    symbol: str = 'BTCUSDT'
+    interval: str = '5m'
+    only_closed: bool = True
+
+
+def ema_series(values: list[float], period: int) -> list[float | None]:
+    result: list[float | None] = [None] * len(values)
+    if len(values) < period:
+        return result
+    current = sum(values[:period]) / period
+    result[period - 1] = current
+    alpha = 2 / (period + 1)
+    for i in range(period, len(values)):
+        current = (values[i] - current) * alpha + current
+        result[i] = current
+    return result
+
+
+def rsi_series(values: list[float], period: int = 14) -> list[float | None]:
+    result: list[float | None] = [None] * len(values)
+    if len(values) <= period:
+        return result
     diffs = [values[i] - values[i - 1] for i in range(1, len(values))]
     gain = sum(max(x, 0) for x in diffs[:period]) / period
     loss = sum(max(-x, 0) for x in diffs[:period]) / period
