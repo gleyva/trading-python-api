@@ -67,7 +67,7 @@ def indicadores(
     periodos: int = Query(
         default=10,
         gt=1,
-        le=800,
+        le=3000,
         description=(
             "Numero de velas a retornar"
         )
@@ -95,7 +95,7 @@ def indicadores(
     # Historial adicional para inicializar
     # los indicadores EMA, RSI, MACD y ADX.
     warmup = 200
-    limit = min(periodos + warmup, 1000)
+    limit = min(periodos + warmup, 2500)
 
     # =====================================
     # 2. CONSULTAR BINANCE
