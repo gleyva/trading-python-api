@@ -14,7 +14,7 @@ app = FastAPI(
 )
 
 
-    # BINANCE_URL = "https://api.binance.com/api/v3/klines"
+# BINANCE_URL = "https://api.binance.com/api/v3/klines"
 BINANCE_URL = "https://data-api.binance.vision/api/v3/klines"
 
 INTERVALOS = {
@@ -304,26 +304,17 @@ def indicadores(
 
         registros.append({
             "open_date": row["open_datetime"].strftime(
-                "%Y-%m-%d"
+                "%Y-%m-%d %H:%M:%S"
             ),
-            "open_time": row["open_datetime"].strftime(
-                "%H:%M:%S"
-            ),
-            "close_date": row["close_datetime"].strftime(
-                "%Y-%m-%d"
-            ),
-            "close_time": row["close_datetime"].strftime(
-                "%H:%M:%S"
-            ),
-            "open_timestamp": int(row["open_time"]),
-            "close_timestamp": int(row["close_time"]),
-
             "open": numero(row["open"]),
             "high": numero(row["high"]),
             "low": numero(row["low"]),
             "close": numero(row["close"]),
             "volume": numero(row["volume"]),
-
+            "quote_volume": numero(row["quote_volume"]),
+            "trades": numero(row["trades"]),
+            "taker_buy_base": numero(row["taker_buy_base"]),
+            "taker_buy_quote": numero(row["taker_buy_quote"]),
             "ema20": numero(row["ema20"]),
             "ema50": numero(row["ema50"]),
             "rsi14": numero(row["rsi14"], 4),
