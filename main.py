@@ -58,7 +58,7 @@ def indicadores(
     timeframe: str = Query("5m"),
     periodos: int = Query(
         100,
-        gt=50,
+        gt=1,
         le=800
     )
 ):
