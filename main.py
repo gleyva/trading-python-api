@@ -60,7 +60,7 @@ def indicadores(
         ),
         examples=["BTCUSDT","SOlUSDT"]
     ),
-    interval2: str = Query(
+    interval: str = Query(
         default="5m",
         examples=["5m","15m","30m","1h","1d"]
     ),
@@ -86,7 +86,7 @@ def indicadores(
             detail="Símbolo inválido"
         )
 
-    if interval2 not in INTERVALOS:
+    if interval not in INTERVALOS:
         raise HTTPException(
             status_code=400,
             detail="Intervalo no soportado por Binance"
@@ -95,7 +95,7 @@ def indicadores(
     # Historial adicional para inicializar
     # los indicadores EMA, RSI, MACD y ADX.
     warmup = 200
-    limit = periodos + warmup
+    limit = min(periodos + warmup, 1000)
 
     # =====================================
     # 2. CONSULTAR BINANCE
@@ -106,7 +106,7 @@ def indicadores(
             BINANCE_URL,
             params={
                 "symbol": symbol,
-                "interval": interval2,
+                "interval": interval,
                 "limit": limit
             },
             timeout=20
@@ -344,7 +344,7 @@ def indicadores(
     return JSONResponse(
         content={
             "symbol": symbol,
-            "timeframe": timeframe,
+            "timeframe": interval,
             "periodos": periodos,
             "timezone": "UTC",
             "velas_recibidas": original_count,
