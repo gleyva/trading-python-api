@@ -60,7 +60,7 @@ def indicadores(
         ),
         examples=["BTCUSDT","SOlUSDT"]
     ),
-    timeframe: str = Query(
+    interval: str = Query(
         default="5m",
         examples=["5m","15m","30m","1h","1d"]
     ),
@@ -69,7 +69,7 @@ def indicadores(
         gt=1,
         le=800,
         description=(
-            "Candidad de velas a retornar"
+            "Numero de velas a retornar"
         )
     )
 ):
@@ -86,10 +86,10 @@ def indicadores(
             detail="Símbolo inválido"
         )
 
-    if timeframe not in INTERVALOS:
+    if interval not in INTERVALOS:
         raise HTTPException(
             status_code=400,
-            detail="Timeframe no soportado por Binance"
+            detail="Intervalo no soportado por Binance"
         )
 
     # Historial adicional para inicializar
@@ -106,7 +106,7 @@ def indicadores(
             BINANCE_URL,
             params={
                 "symbol": symbol,
-                "interval": timeframe,
+                "interval": interval,
                 "limit": limit
             },
             timeout=20
