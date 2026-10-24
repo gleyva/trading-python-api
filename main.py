@@ -9,7 +9,7 @@ import re
 
 app = FastAPI(
     title="Trading Indicators API",
-    description="Indicadores técnicos sobre velas Binance",
+    description="API de análisis técnico de criptomonedas utilizando datos de Binance.",
     version="2.0.0"
 )
 
@@ -48,18 +48,29 @@ def health():
     }
 
 
-@app.get("/indicadores")
+@app.get("/indicadores",tags=["Análisis Técnico"], summary="Consultar velas e indicadores técnicos", 
+         description="Retorna los nPeriodos para el symbol con sus respectivos indicadores tecnicos.")
 def indicadores(
     symbol: str = Query(
-        "BTCUSDT",
+        default="BTCUSDT",
         min_length=3,
-        max_length=20
+        max_length=20,
+        description=(
+            "Instrumento"
+        ),
+        examples=["BTCUSDT","SOlUSDT"]
     ),
-    timeframe: str = Query("5m"),
+    timeframe: str = Query(
+        default="5m",
+        examples=["5m","15m","30m","1h","1d"]
+    ),
     periodos: int = Query(
-        100,
+        default=10,
         gt=1,
-        le=800
+        le=800,
+        description=(
+            "Candidad de velas a retornar"
+        )
     )
 ):
 
