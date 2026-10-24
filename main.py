@@ -60,7 +60,7 @@ def indicadores(
         ),
         examples=["BTCUSDT","SOlUSDT"]
     ),
-    interval: str = Query(
+    interval2: str = Query(
         default="5m",
         examples=["5m","15m","30m","1h","1d"]
     ),
@@ -86,7 +86,7 @@ def indicadores(
             detail="Símbolo inválido"
         )
 
-    if interval not in INTERVALOS:
+    if interval2 not in INTERVALOS:
         raise HTTPException(
             status_code=400,
             detail="Intervalo no soportado por Binance"
@@ -106,7 +106,7 @@ def indicadores(
             BINANCE_URL,
             params={
                 "symbol": symbol,
-                "interval": interval,
+                "interval": interval2,
                 "limit": limit
             },
             timeout=20
