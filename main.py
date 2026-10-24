@@ -67,7 +67,7 @@ def indicadores(
     periodos: int = Query(
         default=10,
         gt=1,
-        le=3000,
+        le=800,
         description=(
             "Numero de velas a retornar"
         )
@@ -95,7 +95,7 @@ def indicadores(
     # Historial adicional para inicializar
     # los indicadores EMA, RSI, MACD y ADX.
     warmup = 200
-    limit = min(periodos + warmup, 2500)
+    limit = min(periodos + warmup, 1000)
 
     # =====================================
     # 2. CONSULTAR BINANCE
@@ -271,6 +271,19 @@ def indicadores(
 
     df["adx14"] = adx["ADX_14"]
 
+    df["atr14"] = ta.atr(
+        high=df["high"],
+        low=df["low"],
+        close=df["close"],
+        length=14,
+        mamode="rma"
+    )
+
+    # ATR expresado como porcentaje del precio
+    df["atr_percent"] = (
+        df["atr14"] / df["close"]
+    ) * 100
+
     # =====================================
     # 6. FORMATEAR FECHAS
     # =====================================
@@ -325,7 +338,10 @@ def indicadores(
                 row["macd_histogram"]
             ),
 
-            "adx14": numero(row["adx14"], 4)
+            "adx14": numero(row["adx14"], 4),
+            "atr14": numero(row["atr14"]),
+            "atr_percent": numero(row["atr_percent"], 4),
+            "pg": numero(row["close"]) - numero(row["open"]),
         })
 
     # =====================================
