@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Query
 import pandas as pd
 import pandas_ta_classic as ta
 import requests
+import numpy as np
 
 app = FastAPI(title="Trading Indicators API", description="API de análisis técnico con datos de Binance.", version="2.1.0")
 BINANCE_URL = "https://data-api.binance.vision/api/v3/klines"
@@ -130,8 +131,8 @@ def depurar_velas(velas: list):
 
 def calcular_indicadores(
     df: pd.DataFrame,
-    comision_por_lado_pct: float = 0.1,
-    umbral_favorable_pct: float = 0.0,
+    comision_por_lado_pct: float = 0.001,   # 0,10 % por operación
+    umbral_favorable_pct: float = 0.1,      # Rentabilidad neta mínima (%)
 ) -> pd.DataFrame:
     """Indicadores causales y etiquetas históricas con horizonte de 12 velas.
 
@@ -208,9 +209,12 @@ def calcular_indicadores(
     df["atr_delta_6_pct"] = (division(df["atr14"], df["atr14"].shift(6)) - 1) * 100
 
     # C. Columnas del resultado futuro — Variable objetivo Y
+
+    # Precios futuros de entrada y salida
     # Estas cinco columnas son las más importantes para entrenar, pero también las más delicadas.
     entrada = df["open"].shift(-1)
     salida = df["open"].shift(-13)
+
     # Precio hipotético de entrada
     df["entrada_futura_open"] = entrada
     # Precio hipotético de salida
@@ -224,8 +228,18 @@ def calcular_indicadores(
     df["retorno_buy_neto_pct"] = (division(salida, entrada) - 1) * 100 - 2 * comision_por_lado_pct
     # Rentabilidad de una venta en corto después de comisiones
     df["retorno_short_neto_pct"] = division(entrada - salida, entrada) * 100 - 2 * comision_por_lado_pct
-    # Clasificación del resultado histórico
-    df["clase_resultado_12_velas"] = None
+    # Clasificación del resultado histórico BUY_FAVORABLE=1, SHORT_FAVORABLE=-1, NO_FAVORABLE=0
+    df["clase_resultado_12_velas"] = np.select(
+        [
+            df["retorno_buy_neto_pct"] > umbral_favorable_pct,
+            df["retorno_short_neto_pct"] > umbral_favorable_pct
+        ],
+        [
+            1,   # BUY_FAVORABLE
+            -1   # SHORT_FAVORABLE
+        ],
+        default=0  # NO_FAVORABLE
+    )
 
     return df
 
