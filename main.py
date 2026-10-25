@@ -13,6 +13,16 @@ BINANCE_URL = "https://data-api.binance.vision/api/v3/klines"
 INTERVALOS = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"}
 COLUMNAS = ["open_time", "open", "high", "low", "close", "volume", "close_time", "quote_volume", "trades", "taker_buy_base", "taker_buy_quote", "ignore"]
 NUMERICAS = ["open_time", "close_time", "open", "high", "low", "close", "volume"]
+CAMPOS_ADICIONALES = [
+    "cuerpo_pct", "rango_vela_pct", "posicion_cierre_rango",
+    "dist_max_12_pct", "dist_min_12_pct", "volume_ratio_20",
+    "ema_spread_pct", "close_ema20_pct", "macd_pct", "macd_hist_pct",
+    "retorno_1_pct", "retorno_3_pct", "retorno_6_pct", "retorno_12_pct",
+    "velas_alcistas_12_pct", "ema_spread_cambio_4_pp",
+    "macd_hist_delta_3", "rsi_delta_4", "adx_delta_4", "atr_delta_6_pct",
+    "entrada_futura_open", "salida_futura_open", "retorno_buy_neto_pct",
+    "retorno_short_neto_pct",
+]
 WARMUP = 200
 
 
@@ -44,6 +54,9 @@ def parsear_fecha(valor: str, fin_dia: bool = False) -> datetime:
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail=f"Fecha inválida: {valor}. Use YYYY-MM-DD o ISO-8601")
 
+# Evitar división por cero: undefined -> NaN -> null en JSON.
+def division(numerador, denominador):
+    return numerador.div(denominador.replace(0, float("nan")))
 
 def consultar_binance(symbol: str, interval: str, limit: int, inicio_ms: Optional[int] = None, fin_ms: Optional[int] = None):
     params = {"symbol": symbol, "interval": interval, "limit": limit}
@@ -115,8 +128,25 @@ def depurar_velas(velas: list):
     return df, original_count
 
 
-def calcular_indicadores(df: pd.DataFrame):
+def calcular_indicadores(
+    df: pd.DataFrame,
+    comision_por_lado_pct: float = 0.1,
+    umbral_favorable_pct: float = 0.0,
+) -> pd.DataFrame:
+    """Indicadores causales y etiquetas históricas con horizonte de 12 velas.
+
+    Comisión: porcentaje aplicado por cada operación (entrada y salida).
+    Etiquetas: la señal de t se ejecutaría en Open[t+1] y cerraría
+    en Open[t+13]. Las columnas futuras NO se usan como predictores.
+    """
+    if comision_por_lado_pct < 0 or umbral_favorable_pct < 0:
+        raise ValueError("Las comisiones y el umbral deben ser no negativos")
+
     df = df.copy()
+    for columna in ("open", "high", "low", "close", "volume"):
+        df[columna] = pd.to_numeric(df[columna], errors="coerce")
+
+    # Indicadores originales, conservando nombres y parámetros.
     df["ema20"] = ta.ema(df["close"], length=20)
     df["ema50"] = ta.ema(df["close"], length=50)
     df["rsi14"] = ta.rsi(df["close"], length=14)
@@ -126,8 +156,77 @@ def calcular_indicadores(df: pd.DataFrame):
     df["macd_histogram"] = macd["MACDh_12_26_9"]
     adx = ta.adx(high=df["high"], low=df["low"], close=df["close"], length=14)
     df["adx14"] = adx["ADX_14"]
-    df["atr14"] = ta.atr(high=df["high"], low=df["low"], close=df["close"], length=14, mamode="rma")
+    df["atr14"] = ta.atr(
+        high=df["high"], low=df["low"], close=df["close"], length=14, mamode="rma"
+    )
+    # Volatilidad porcentual
     df["atr_percent"] = (df["atr14"] / df["close"]) * 100
+
+    # Relaciones entre variables — Nivel 2
+    # Comportamiento del mercado con independencia parcial del nivel absoluto del precio.
+    # Tamaño y dirección del cuerpo de la vela
+    df["cuerpo_pct"] = division(df["close"] - df["open"], df["open"]) * 100
+    # Amplitud porcentual de la vela
+    df["rango_vela_pct"] = division(df["high"] - df["low"], df["open"]) * 100
+    # Posición del cierre dentro de la vela, entre 0 y 1
+    df["posicion_cierre_rango"] = division(df["close"] - df["low"], df["high"] - df["low"])
+    # Distancia del cierre al máximo de las últimas 12 velas, incluida la actual
+    df["dist_max_12_pct"] = (division(df["close"], df["high"].rolling(12, min_periods=12).max()) - 1) * 100
+    # Distancia del cierre al mínimo de las últimas 12 velas
+    df["dist_min_12_pct"] = (division(df["close"], df["low"].rolling(12, min_periods=12).min()) - 1) * 100
+    # Volumen actual respecto a su promedio de 20 velas
+    df["volume_ratio_20"] = division(df["volume"], df["volume"].rolling(20, min_periods=20).mean())
+    # Separación entre EMA20 y EMA50
+    df["ema_spread_pct"] = division(df["ema20"] - df["ema50"], df["close"]) * 100
+    # Distancia relativa entre cierre y EMA20
+    df["close_ema20_pct"] = (division(df["close"], df["ema20"]) - 1) * 100
+    # MACD relativo al precio
+    df["macd_pct"] = division(df["macd"], df["close"]) * 100
+    # Histograma MACD relativo al precio
+    df["macd_hist_pct"] = division(df["macd_histogram"], df["close"]) * 100  
+
+    # Dinámica temporal — Nivel 3
+    # Describen Cómo está cambiando el precio o el indicador, no solamente su valor actual.
+    # Variación del cierre respecto a la vela anterior
+    for n in (1, 3, 6, 12):
+        df[f"retorno_{n}_pct"] = (division(df["close"], df["close"].shift(n)) - 1) * 100
+
+    # Proporción de las últimas 12 velas con Close > Open
+    df["velas_alcistas_12_pct"] = (
+        (df["close"] > df["open"]).astype(float)
+        .rolling(12, min_periods=12).sum() / 12 * 100
+    )
+    # Cambio de la separación EMA20/EMA50 en 4 velas
+    df["ema_spread_cambio_4_pp"] = df["ema_spread_pct"] - df["ema_spread_pct"].shift(4)
+    # Cambio del histograma MACD en 3 velas
+    df["macd_hist_delta_3"] = df["macd_histogram"] - df["macd_histogram"].shift(3)
+    # Cambio del RSI durante 4 velas
+    df["rsi_delta_4"] = df["rsi14"] - df["rsi14"].shift(4)
+    # Cambio del ADX durante 4 velas
+    df["adx_delta_4"] = df["adx14"] - df["adx14"].shift(4)
+    #Cambio porcentual del ATR durante 6 velas
+    df["atr_delta_6_pct"] = (division(df["atr14"], df["atr14"].shift(6)) - 1) * 100
+
+    # C. Columnas del resultado futuro — Variable objetivo Y
+    # Estas cinco columnas son las más importantes para entrenar, pero también las más delicadas.
+    entrada = df["open"].shift(-1)
+    salida = df["open"].shift(-13)
+    # Precio hipotético de entrada
+    df["entrada_futura_open"] = entrada
+    # Precio hipotético de salida
+    df["salida_futura_open"] = salida
+
+    # Aproximación: comisión porcentual por lado, calculada sobre nocional.
+    # Retorno BUY = ((salida / entrada) - 1) * 100 - 2 * comisión.
+    # Retorno SHORT = ((entrada - salida) / entrada) * 100 - 2 * comisión.
+    # No incluye spread, slippage, funding ni liquidaciones.
+    # Rentabilidad de una compra larga después de comisiones
+    df["retorno_buy_neto_pct"] = (division(salida, entrada) - 1) * 100 - 2 * comision_por_lado_pct
+    # Rentabilidad de una venta en corto después de comisiones
+    df["retorno_short_neto_pct"] = division(entrada - salida, entrada) * 100 - 2 * comision_por_lado_pct
+    # Clasificación del resultado histórico
+    df["clase_resultado_12_velas"] = None
+
     return df
 
 
@@ -155,6 +254,8 @@ def formatear_registros(df: pd.DataFrame, indicadores: bool):
                 "atr_percent": numero(row["atr_percent"], 4),
                 "pg": numero(row["close"]) - numero(row["open"]),
             })
+            item.update({campo: numero(row[campo]) for campo in CAMPOS_ADICIONALES})
+            item["clase_resultado_12_velas"] = row["clase_resultado_12_velas"]
         registros.append(item)
     return registros
 
