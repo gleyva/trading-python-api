@@ -22,7 +22,7 @@ CAMPOS_ADICIONALES = [
     "velas_alcistas_12_pct", "ema_spread_cambio_4_pp",
     "macd_hist_delta_3", "rsi_delta_4", "adx_delta_4", "atr_delta_6_pct",
     "entrada_futura_open", "salida_futura_open", "retorno_buy_neto_pct",
-    "retorno_short_neto_pct",
+    "retorno_short_neto_pct","pg_futura","comision_futura",
 ]
 WARMUP = 200
 
@@ -132,7 +132,7 @@ def depurar_velas(velas: list):
 def calcular_indicadores(
     df: pd.DataFrame,
     comision_por_lado_pct: float = 0.001,   # 0,10 % por operación
-    umbral_favorable_pct: float = 0.1,      # Rentabilidad neta mínima (%)
+    umbral_favorable_pct: float = 0.1,      # Rentabilidad neta mínima (10%)
 ) -> pd.DataFrame:
     """Indicadores causales y etiquetas históricas con horizonte de 12 velas.
 
@@ -219,20 +219,24 @@ def calcular_indicadores(
     df["entrada_futura_open"] = entrada
     # Precio hipotético de salida
     df["salida_futura_open"] = salida
+    # P&G Bruto
+    df["pg_futura"] = salida - entrada
+    # Comision del broker = comision entrada + comision de salida
+    df["comision_futura"] = (entrada*comision_por_lado_pct) + (salida*comision_por_lado_pct)
 
     # Aproximación: comisión porcentual por lado, calculada sobre nocional.
     # Retorno BUY = ((salida / entrada) - 1) * 100 - 2 * comisión.
     # Retorno SHORT = ((entrada - salida) / entrada) * 100 - 2 * comisión.
     # No incluye spread, slippage, funding ni liquidaciones.
     # Rentabilidad de una compra larga después de comisiones
-    rSalida = salida*(1-comision_por_lado_pct)
-    rEntrada = entrada * (1+comision_por_lado_pct)
-    df["retorno_buy_neto_pct"] = division(rSalida, rEntrada) -1
+    bSalida = salida*(1-comision_por_lado_pct)
+    bEntrada = entrada * (1+comision_por_lado_pct)
+    df["retorno_buy_neto_pct"] = division(bSalida, bEntrada) -1
 
     # Rentabilidad de una venta en corto después de comisiones
-    rEntrada = entrada * (1-comision_por_lado_pct)
-    rSalida = salida*(1+comision_por_lado_pct)
-    df["retorno_short_neto_pct"] = division(rEntrada-rSalida, entrada)
+    sEntrada = entrada * (1-comision_por_lado_pct)
+    sSalida = salida*(1+comision_por_lado_pct)
+    df["retorno_short_neto_pct"] = division(sEntrada-sSalida, entrada)
     
     # Clasificación del resultado histórico BUY_FAVORABLE=1, SHORT_FAVORABLE=-1, NO_FAVORABLE=0
     df["clase_resultado_12_velas"] = 0  # NO_FAVORABLE
