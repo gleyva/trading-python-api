@@ -132,7 +132,7 @@ def depurar_velas(velas: list):
 def calcular_indicadores(
     df: pd.DataFrame,
     comision_por_lado_pct: float = 0.001,   # 0,10 % por operación
-    umbral_favorable_pct: float = 0.1,      # Rentabilidad neta mínima (10%)
+    umbral_favorable_pct: float = 0.01,      # Rentabilidad neta mínima (0,10%)
 ) -> pd.DataFrame:
     """Indicadores causales y etiquetas históricas con horizonte de 12 velas.
 
@@ -239,31 +239,21 @@ def calcular_indicadores(
     df["retorno_short_neto_pct"] = division(sEntrada-sSalida, entrada)
     
     # Clasificación del resultado histórico BUY_FAVORABLE=1, SHORT_FAVORABLE=-1, NO_FAVORABLE=0
+    # Si al ganancia neta > umbral de 0,1%
+    # Inicializar clasificación
     df["clase_resultado_12_velas"] = 0  # NO_FAVORABLE
 
     # BUY_FAVORABLE = 1
     df.loc[
-        df["retorno_buy_neto_pct"] > umbral_favorable_pct,
+        df["retorno_buy_neto_pct"] >= umbral_favorable_pct,
         "clase_resultado_12_velas"
-    ] = 1  # BUY_FAVORABLE
+    ] = 1
 
     # SHORT_FAVORABLE = -1
     df.loc[
-        df["retorno_short_neto_pct"] > umbral_favorable_pct,
+        df["retorno_short_neto_pct"] >= umbral_favorable_pct,
         "clase_resultado_12_velas"
-    ] = -1 # SHORT_FAVORABLE    
-
-    # Sin información futura suficiente
-    sin_futuro = (
-        df["entrada_futura_open"].isna() |
-        df["salida_futura_open"].isna()
-    )
-
-    df["clase_resultado_12_velas"] = (
-        df["clase_resultado_12_velas"]
-        .astype("Int64")
-        .mask(sin_futuro, pd.NA)
-    )
+    ] = -1
 
     return df
 
