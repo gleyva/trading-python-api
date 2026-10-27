@@ -225,20 +225,40 @@ def calcular_indicadores(
     # Retorno SHORT = ((entrada - salida) / entrada) * 100 - 2 * comisión.
     # No incluye spread, slippage, funding ni liquidaciones.
     # Rentabilidad de una compra larga después de comisiones
-    df["retorno_buy_neto_pct"] = (division(salida, entrada) - 1) * 100 - 2 * comision_por_lado_pct
+    rSalida = salida*(1-comision_por_lado_pct)
+    rEntrada = entrada * (1+comision_por_lado_pct)
+    df["retorno_buy_neto_pct"] = division(rSalida, rEntrada) -1
+
     # Rentabilidad de una venta en corto después de comisiones
-    df["retorno_short_neto_pct"] = division(entrada - salida, entrada) * 100 - 2 * comision_por_lado_pct
+    rEntrada = entrada * (1-comision_por_lado_pct)
+    rSalida = salida*(1+comision_por_lado_pct)
+    df["retorno_short_neto_pct"] = division(rEntrada-rSalida, entrada)
+    
     # Clasificación del resultado histórico BUY_FAVORABLE=1, SHORT_FAVORABLE=-1, NO_FAVORABLE=0
-    df["clase_resultado_12_velas"] = np.select(
-        [
-            df["retorno_buy_neto_pct"] > umbral_favorable_pct,
-            df["retorno_short_neto_pct"] > umbral_favorable_pct
-        ],
-        [
-            1,   # BUY_FAVORABLE
-            -1   # SHORT_FAVORABLE
-        ],
-        default=0  # NO_FAVORABLE
+    df["clase_resultado_12_velas"] = 0  # NO_FAVORABLE
+
+    # BUY_FAVORABLE = 1
+    df.loc[
+        df["retorno_buy_neto_pct"] > umbral_favorable_pct,
+        "clase_resultado_12_velas"
+    ] = 1  # BUY_FAVORABLE
+
+    # SHORT_FAVORABLE = -1
+    df.loc[
+        df["retorno_short_neto_pct"] > umbral_favorable_pct,
+        "clase_resultado_12_velas"
+    ] = -1 # SHORT_FAVORABLE    
+
+    # Sin información futura suficiente
+    sin_futuro = (
+        df["entrada_futura_open"].isna() |
+        df["salida_futura_open"].isna()
+    )
+
+    df["clase_resultado_12_velas"] = (
+        df["clase_resultado_12_velas"]
+        .astype("Int64")
+        .mask(sin_futuro, pd.NA)
     )
 
     return df
