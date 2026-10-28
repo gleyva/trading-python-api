@@ -131,8 +131,8 @@ def depurar_velas(velas: list):
 
 def calcular_indicadores(
     df: pd.DataFrame,
-    comision_por_lado_pct: float = 0.001,   # 0,10 % por operación
-    umbral_favorable_pct: float = 0.01,      # Rentabilidad neta mínima (0,10%)
+    comision_por_lado_pct: float = 0.1,     # 0,10 % por operación (en unidades porcentuales)
+    umbral_favorable_pct: float = 0.1,     # Rentabilidad neta mínima: 0,10%
 ) -> pd.DataFrame:
     """Indicadores causales y etiquetas históricas con horizonte de 12 velas.
 
@@ -140,7 +140,7 @@ def calcular_indicadores(
     Etiquetas: la señal de t se ejecutaría en Open[t+1] y cerraría
     en Open[t+13]. Las columnas futuras NO se usan como predictores.
     """
-    if comision_por_lado_pct < 0 or umbral_favorable_pct < 0:
+    if comision_por_lado_pct < 0 or comision_por_lado_pct >= 100 or umbral_favorable_pct < 0:
         raise ValueError("Las comisiones y el umbral deben ser no negativos")
 
     df = df.copy()
@@ -214,6 +214,7 @@ def calcular_indicadores(
     # Estas cinco columnas son las más importantes para entrenar, pero también las más delicadas.
     entrada = df["open"].shift(-1)
     salida = df["open"].shift(-13)
+    f = comision_por_lado_pct / 100.0
 
     # Precio hipotético de entrada
     df["entrada_futura_open"] = entrada
@@ -222,39 +223,42 @@ def calcular_indicadores(
     # P&G Bruto
     df["pg_futura"] = salida - entrada
     # Comision del broker = comision entrada + comision de salida
-    df["comision_futura"] = (entrada*comision_por_lado_pct) + (salida*comision_por_lado_pct)
+    df["comision_futura"] = (entrada*f) + (salida*f)
 
     # Aproximación: comisión porcentual por lado, calculada sobre nocional.
     # Retorno BUY = ((salida / entrada) - 1) * 100 - 2 * comisión.
     # Retorno SHORT = ((entrada - salida) / entrada) * 100 - 2 * comisión.
     # No incluye spread, slippage, funding ni liquidaciones.
     # Rentabilidad de una compra larga después de comisiones
-    bSalida = salida*(1-comision_por_lado_pct)
-    bEntrada = entrada * (1+comision_por_lado_pct)
-    df["retorno_buy_neto_pct"] = division(bSalida, bEntrada) -1
+    # Spot: comisión de compra descontada en BTC y venta descontada en USDT.
+    bSalida = salida * (1-f)
+    bEntrada = entrada
+    df["retorno_buy_neto_pct"] = (division(bSalida * (1-f), bEntrada) - 1) * 100
 
     # Rentabilidad de una venta en corto después de comisiones
-    sEntrada = entrada * (1-comision_por_lado_pct)
-    sSalida = salida*(1+comision_por_lado_pct)
-    df["retorno_short_neto_pct"] = division(sEntrada-sSalida, entrada)
+    sEntrada = entrada * (1-f)
+    sSalida = salida * (1+f)
+    df["retorno_short_neto_pct"] = division(sEntrada-sSalida, entrada) * 100
     
     # Clasificación del resultado histórico BUY_FAVORABLE=1, SHORT_FAVORABLE=-1, NO_FAVORABLE=0
     # Si al ganancia neta > umbral de 0,1%
     # Inicializar clasificación
-    df["clase_resultado_12_velas"] = 0  # NO_FAVORABLE
+    df["clase_resultado_12_velas"] = np.nan  # Sin futuro suficiente = sin etiqueta
+    tiene_futuro = entrada.notna() & salida.notna()
 
     # BUY_FAVORABLE = 1
     df.loc[
-        df["retorno_buy_neto_pct"] >= umbral_favorable_pct,
+        tiene_futuro & (df["retorno_buy_neto_pct"] >= umbral_favorable_pct),
         "clase_resultado_12_velas"
     ] = 1
 
     # SHORT_FAVORABLE = -1
     df.loc[
-        df["retorno_short_neto_pct"] >= umbral_favorable_pct,
+        tiene_futuro & (df["retorno_short_neto_pct"] >= umbral_favorable_pct),
         "clase_resultado_12_velas"
     ] = -1
 
+    df.loc[tiene_futuro & df["clase_resultado_12_velas"].isna(), "clase_resultado_12_velas"] = 0
     return df
 
 
@@ -280,10 +284,9 @@ def formatear_registros(df: pd.DataFrame, indicadores: bool):
                 "macd_signal": numero(row["macd_signal"]), "macd_histogram": numero(row["macd_histogram"]),
                 "adx14": numero(row["adx14"], 4), "atr14": numero(row["atr14"]),
                 "atr_percent": numero(row["atr_percent"], 4),
-                "pg": numero(row["close"]) - numero(row["open"]),
             })
             item.update({campo: numero(row[campo]) for campo in CAMPOS_ADICIONALES})
-            item["clase_resultado_12_velas"] = row["clase_resultado_12_velas"]
+            item["clase_resultado_12_velas"] = (None if pd.isna(row["clase_resultado_12_velas"]) else int(row["clase_resultado_12_velas"]))
         registros.append(item)
     return registros
 
